@@ -1,0 +1,221 @@
+NodeJS Interview Challenge
+
+Problem Statement - 
+This problem statement depicts one of the interesting challenges we solve on a day-to-day basis.
+Your task if you choose to do it: Create a NodeJS based API to receive, process, and store Heart Rate data asynchronously. In the test data, we have provided below, you have 956 Heart rate values span across 3 days from 06th Oct to 9th Oct. Assume this is the payload you are receiving from a real device attached to a patient. This payload also contains other clinical metrics data (like steps etc)
+
+====================================================
+
+Task 1: Create a NodeJS (using express) API to consume the payload given below. Document readme file with steps to run.
+Task 2: In the payload process HEART_RATE data separately as per this logic.
+Aggregate min and max heart rate for every 15 minutes.
+For example, if you have 20 readings ranging 65 to 120 between 07 am to 07:15 am, and 10 readings ranging 70-100 between 07:18 am to 07:23 am this needs to be aggregated to
+    		{"from_date": "2020-10-06T07:00:00.0Z",
+			"to_date": "2020-10-06T07:15:00.0Z",
+					"measurement" : {
+					"low":"65",
+                     "high":"120"}
+			},
+            {"from_date": "2020-10-06T07:18:00.0Z",
+			"to_date": "2020-10-06T07:23:00.0Z",
+					"measurement" : {
+					"low":"70",
+                     "high":"100"}
+			}
+So the 956 heart rate values need to be grouped in the intervals of 15 minutes and the min and max value needs to be returned within that time frame.
+
+Task 3: Return the processed response including HEART_RATE and other metrics.
+
+
+Bonus points (only if you get the time and after finishing the above three tasks)
+Store the data in a Postgres table.
+
+====================================================
+Readme - 
+Nodejs and other dependencies installed. This will depend on the package config.
+Any IDE to code (eg, vscode)
+Add below code into router.js file at your IDE. 
+Parallel to router.js, add the dummyPayload as JSON file as storing and retrieving from db is the scope.Similarly, prepare a logical schema /swagger for validations.
+Run node router.js in the terminal in your working folder.
+
+
+Assumptions - 
+As it was mentioned that storing in DB is not the scope, I am using  dummyPayload, please upload the mock data in a json file and require accordingy.
+It is assumed that only metric will be aggregated or calculated if having data.
+Before writing the get function blindly, we have a validator to preprocess the data based on scheme.json builded (similar to swagger)
+The test data may be huge as this is a real time application, so I have used a safe limit to consume large data sets - 
+app.use(express.json({ limit: '50gb' })); //This is a hypothetical limit
+
+What is  router.js? This is the main file (only one for ease)
+Note - at Production ready code, it is advisable to have generic files and folders as per the routes and logics handling. This preprocesses the data to give the output contract (using schema Checker)  and avoid inconsistencies.
+
+
+CODE
+
+Router.js (only one file for simplicity as part of POC)
+
+const express = require('express');
+const bodyParser = require('body-parser');
+const dummyPayload = require('./clinic.json')
+const schema = require('./schema.json')
+
+const app = express();
+
+app.use(express.json({ limit: '50gb' }));
+app.use(bodyParser.json());
+
+
+// Endpoint for receiving metric rate data
+app.get('/tracker, (req, res) => {
+  const response = processDataRouter();
+  res.status(200).send(response);
+});
+
+
+
+function validateObject(obj, schema) {
+  if (!obj || typeof obj !== 'object' || !schema || typeof schema !== 'object') {
+    return false;
+  }
+
+  for (let prop in schema) {
+    if (schema[prop].required && !obj.hasOwnProperty(prop)) {
+      return false;
+    }
+
+    if (obj.hasOwnProperty(prop)) {
+      const value = obj[prop];
+      const type = schema[prop].type;
+
+      if (type === 'object' && !validateObject(value, schema[prop].properties)) {
+        return false;
+      }
+
+      if (type === 'array' && (!Array.isArray(value))) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+
+
+
+
+
+
+function processMetricRateData() {
+  let measurements = [];
+  const interval = 15; //this is configurable
+  const processedData = {}
+
+
+  payload = dummyPayload.clinical_data //store in db is not in scope
+
+
+
+  // validator before processing the output, as it is a get request, we can also give blank json as output. I am making a bad request. 
+  const isValid = validateObject(payload, schema);
+  if (!isValid) {
+    return { status: 400 } 
+  }
+
+
+  for (const category in payload) {
+    const categoryWisePayload = payload.hasOwnProperty(category) && payload[category].data
+
+    if (categoryWisePayload) { //safe check
+      let startTime = new Date(categoryWisePayload[0].on_date);
+      processedData[category] = categoryWisePayload.reduce((result, current, index) => {
+        const currentDate = new Date(current.on_date);
+
+        if (currentDate > new Date(startTime.getTime() + interval * 60000)) {
+          /**
+           * If the measurement is outside the current interval, 
+           * calculate the minimum and maximum heart rate for the current interval and 
+           * add it to the result array.
+           **/
+          if (measurements.length > 0) {
+            const from_date = startTime.toISOString();
+            const to_date = new Date(startTime.getTime() + interval * 60000).toISOString();
+            result.push({
+              from_date,
+              to_date,
+              measurement: {
+                low: Math.min(...measurements),
+                high: Math.max(...measurements)
+              }
+            });
+          }
+          startTime = new Date(current.on_date);
+          measurements = [];
+        }
+
+        // Add heart rate measurement to current interval
+        measurements.push(current.measurement);
+
+        if (index === categoryWisePayload.length - 1 && measurements.length > 0) {
+          /**
+           * since, we have used reduce,which does not necessarily include the final element of the input payload,
+           * calculate the minimum and maximum heart rate for the last.
+           */
+          const from_date = startTime.toISOString();
+          const to_date = new Date(startTime.getTime() + interval * 60000).toISOString();
+          result.push({
+            from_date,
+            to_date,
+            measurement: {
+              low: Math.min(...measurements),
+              high: Math.max(...measurements)
+            }
+          });
+        }
+
+        return result;
+      }, []);
+    }
+  }
+
+  // return processed heart rate data
+  return processedData
+}
+
+
+Schema.json (flexibly configurable)
+{
+    "HEART_RATE": {
+        "required": true,
+        "type": "object",
+        "properties": {
+            "data": {
+                "required": true,
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "measurement": {
+                            "required": true,
+                            "type": "string"
+                        },
+                        "on_date": {
+                            "required": true,
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "STEPS": {
+        "required": true,
+        "type": "object",
+        "properties": {}
+    }
+}
+
+
+Dev Validations:
+
+This is tested via the sample testJSON shared.
